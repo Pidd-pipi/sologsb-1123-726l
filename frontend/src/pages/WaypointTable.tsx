@@ -18,13 +18,13 @@ import {
   Typography,
   type TableProps,
 } from 'antd';
-import { ImportOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { ImportOutlined, ThunderboltOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
 import { useRouteMetrics, DEFAULT_ROUTE_PARAMS } from '../hooks/useRouteMetrics';
 import AmapRouteView from '../components/common/AmapRouteView';
 import { WAYPOINT_ACTIONS, parseWaypointText, type Waypoint, type WaypointAction } from '../types/waypoint';
-import { calcGsd, groundCoverage } from '../utils/geoCalc';
+import { calcGsd, groundCoverage, pointInPolygon } from '../utils/geoCalc';
 
 type Columns = NonNullable<TableProps<Waypoint>['columns']>;
 
@@ -35,6 +35,7 @@ export default function WaypointTable() {
   const waypoints = useWaypointStore((s) => s.items);
   const addMany = useWaypointStore((s) => s.addMany);
   const update = useWaypointStore((s) => s.update);
+  const shiftMany = useWaypointStore((s) => s.shiftMany);
   const move = useWaypointStore((s) => s.move);
   const reorder = useWaypointStore((s) => s.reorder);
   const remove = useWaypointStore((s) => s.remove);
@@ -51,12 +52,32 @@ export default function WaypointTable() {
   const [previewId, setPreviewId] = useState('');
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [shiftEast, setShiftEast] = useState(0);
+  const [shiftNorth, setShiftNorth] = useState(0);
+  const [shiftViolations, setShiftViolations] = useState<Waypoint[]>([]);
 
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(''), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  /** 导入后即落在测区外（或平移后越界）的航点；移回界内前不允许保存航线参数 */
+  const outsideRows = useMemo(() => {
+    if (!mission || mission.areaPolygon.length < 3) return [];
+    return rows.filter((w) => !pointInPolygon([w.lng, w.lat], mission.areaPolygon));
+  }, [rows, mission]);
+  const outsideIds = useMemo(() => new Set(outsideRows.map((w) => w.id)), [outsideRows]);
+
+  // 航点被删除或清空后，同步清理勾选状态，避免对已不存在的点执行平移
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const alive = new Set(rows.map((w) => w.id));
+      const next = prev.filter((id) => alive.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [rows]);
 
   const preview = rows.find((w) => w.id === previewId) ?? rows[0];
   const metrics = useRouteMetrics(id, { ...DEFAULT_ROUTE_PARAMS, altitude: preview?.altitude ?? 120 });
@@ -94,10 +115,36 @@ export default function WaypointTable() {
     setToast(`已把 ${rows.length} 个航点的高度统一改为 ${batchAltitude} m`);
   };
 
+  const applyShift = async () => {
+    if (!mission || selectedIds.length === 0) return;
+    const result = await shiftMany(selectedIds, shiftEast, shiftNorth, mission.areaPolygon);
+    if (!result.applied) {
+      setShiftViolations(result.violations);
+      setError('平移未执行：以下航点移动后会越过测区边界，已整体取消（未勾选的点本就留在原位）。');
+      setToast('');
+      return;
+    }
+    setShiftViolations([]);
+    setError('');
+    const parts = [result.eastM !== 0 ? `向东 ${result.eastM} m` : '', result.northM !== 0 ? `向北 ${result.northM} m` : ''].filter(Boolean);
+    setToast(`已整体平移 ${result.moved.length} 个航点（${parts.join('、') || '未移动'}），其余航点保持原位`);
+  };
+
   const columns: Columns = [
     { title: '序号', dataIndex: 'seq', width: 70, render: (v: number) => `#${v}` },
     { title: '经度', dataIndex: 'lng', width: 120, render: (v: number) => v.toFixed(6) },
     { title: '纬度', dataIndex: 'lat', width: 120, render: (v: number) => v.toFixed(6) },
+    {
+      title: '测区位置',
+      width: 100,
+      filters: [
+        { text: '界外航点', value: 'outside' },
+        { text: '界内航点', value: 'inside' },
+      ],
+      onFilter: (value, row) => (value === 'outside' ? outsideIds.has(row.id) : !outsideIds.has(row.id)),
+      render: (_: unknown, row: Waypoint) =>
+        outsideIds.has(row.id) ? <Tag color="error">界外</Tag> : <Tag color="success">界内</Tag>,
+    },
     {
       title: '相对航高 m',
       width: 140,
@@ -220,6 +267,7 @@ export default function WaypointTable() {
           航点明细 · {mission.missionNo}
         </Typography.Title>
         <Tag color="green">航点 {rows.length} 个</Tag>
+        {outsideRows.length > 0 ? <Tag color="error">界外 {outsideRows.length} 个 · 禁止保存航线参数</Tag> : null}
         <Tag>传感器 {mission.sensorWidth}×{mission.sensorHeight} mm / f{mission.focalLength} mm</Tag>
         <div style={{ flex: 1 }} />
         <Button type="link">
@@ -235,6 +283,40 @@ export default function WaypointTable() {
 
       {toast ? <Alert type="success" showIcon message={toast} closable onClose={() => setToast('')} /> : null}
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
+      {outsideRows.length > 0 ? (
+        <Alert
+          data-testid="outside-waypoint-alert"
+          type="error"
+          showIcon
+          message={`有 ${outsideRows.length} 个航点在测区边界外，移回界内前不能保存航线参数`}
+          description={
+            <Space size={4} wrap>
+              {outsideRows.map((w) => (
+                <Tag key={w.id} color="error">
+                  #{w.seq}（{w.lng.toFixed(6)}, {w.lat.toFixed(6)}）
+                </Tag>
+              ))}
+            </Space>
+          }
+        />
+      ) : null}
+      {shiftViolations.length > 0 ? (
+        <Alert
+          data-testid="shift-violation-alert"
+          type="warning"
+          showIcon
+          message="平移后越界的航点"
+          description={
+            <Space size={4} wrap>
+              {shiftViolations.map((w) => (
+                <Tag key={w.id} color="warning">
+                  #{w.seq}（{w.lng.toFixed(6)}, {w.lat.toFixed(6)}）
+                </Tag>
+              ))}
+            </Space>
+          }
+        />
+      ) : null}
 
       <Row gutter={14}>
         <Col span={10}>
@@ -259,6 +341,57 @@ export default function WaypointTable() {
               <Button icon={<ThunderboltOutlined />} onClick={applyBatchAltitude} disabled={rows.length === 0}>
                 应用到全部航点
               </Button>
+            </Space>
+          </Card>
+          <Card
+            size="small"
+            title="测区内整体平移"
+            style={{ marginTop: 12 }}
+            extra={<Tag color={selectedIds.length > 0 ? 'blue' : 'default'}>已勾选 {selectedIds.length} / {rows.length}</Tag>}
+          >
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Typography.Text type="secondary">
+                在下方表格勾选航点，整体向东、向北平移（相对队形不变）；未勾选的点留在原位。任一点平移后越过测区边界时整批不执行。
+              </Typography.Text>
+              <Space wrap>
+                <span>向东</span>
+                <InputNumber
+                  addonAfter="m"
+                  value={shiftEast}
+                  step={1}
+                  style={{ width: 130 }}
+                  onChange={(v) => setShiftEast(Number(v ?? 0))}
+                />
+                <span>向北</span>
+                <InputNumber
+                  addonAfter="m"
+                  value={shiftNorth}
+                  step={1}
+                  style={{ width: 130 }}
+                  onChange={(v) => setShiftNorth(Number(v ?? 0))}
+                />
+              </Space>
+              <Space wrap>
+                <Button
+                  type="primary"
+                  icon={<SwapOutlined />}
+                  onClick={applyShift}
+                  disabled={selectedIds.length === 0 || (shiftEast === 0 && shiftNorth === 0)}
+                >
+                  平移已勾选航点
+                </Button>
+                <Button
+                  onClick={() => {
+                    setSelectedIds(rows.map((w) => w.id));
+                  }}
+                  disabled={rows.length === 0}
+                >
+                  全选
+                </Button>
+                <Button onClick={() => setSelectedIds([])} disabled={selectedIds.length === 0}>
+                  清除勾选
+                </Button>
+              </Space>
             </Space>
           </Card>
           <Card size="small" title="单点视场预览" style={{ marginTop: 12 }}>
@@ -307,15 +440,21 @@ export default function WaypointTable() {
         </Col>
       </Row>
 
-      <Card size="small" title="航点表格（可改高度/航速/航向/云台/动作，支持上下移与拖拽换序）">
+      <Card size="small" title="航点表格（勾选航点可整体平移；界外航点红行标注，移回测区前不能保存航线参数）">
         <Table<Waypoint>
           rowKey="id"
           size="small"
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 1600 }}
+          scroll={{ x: 1700 }}
           locale={{ emptyText: '暂无航点，请先粘贴导入' }}
+          rowClassName={(row) => (outsideIds.has(row.id) ? 'waypoint-row-outside' : '')}
+          rowSelection={{
+            selectedRowKeys: selectedIds,
+            onChange: (keys) => setSelectedIds(keys.map(String)),
+            preserveSelectedRowKeys: true,
+          }}
         />
       </Card>
     </Space>

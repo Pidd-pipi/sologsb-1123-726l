@@ -25,6 +25,46 @@ export function metersToLngLat(x: number, y: number, origin: LngLat): LngLat {
   return [oLng + x / metersPerDegLng(oLat), oLat + y / METERS_PER_DEG_LAT];
 }
 
+/**
+ * 按向东、向北米数平移一个经纬度点（等距圆柱近似，以该点自身纬度为参考）。
+ * 同一组 (eastM, northM) 应用到一组点时，点间相对位置保持不变。
+ */
+export function shiftLngLat(point: LngLat, eastM: number, northM: number): LngLat {
+  return metersToLngLat(eastM, northM, point);
+}
+
+/** 点是否落在多边形的某条边上（按米制距离做约 0.2 m 容差，兼容经纬度 6 位取整） */
+function pointOnSegmentMeters(point: LngLat, a: LngLat, b: LngLat): boolean {
+  const origin = a;
+  const p = lngLatToMeters(point, origin);
+  const pa = lngLatToMeters(a, origin);
+  const pb = lngLatToMeters(b, origin);
+  const cross = (pb.x - pa.x) * (p.y - pa.y) - (pb.y - pa.y) * (p.x - pa.x);
+  const dot = (p.x - pa.x) * (p.x - pb.x) + (p.y - pa.y) * (p.y - pb.y);
+  if (Math.abs(cross) > 0.2) return false;
+  // 垂足在线段上（dot<=0）时距离即为垂线距离；端点情况由最近端点距离兜底
+  if (dot <= 0) return true;
+  return Math.hypot(p.x - pa.x, p.y - pa.y) <= 0.2 || Math.hypot(p.x - pb.x, p.y - pb.y) <= 0.2;
+}
+
+/**
+ * 点是否在测区多边形内（射线法，边界点视为界内）。
+ * 顶点不足 3 个无法构成多边形时不做越界判定，返回 true。
+ */
+export function pointInPolygon(point: LngLat, polygon: LngLat[]): boolean {
+  if (polygon.length < 3) return true;
+  const [x, y] = point;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if (pointOnSegmentMeters(point, polygon[i], polygon[j])) return true;
+    const intersects = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
 /** 两点间水平距离 m */
 export function distanceMeters(a: LngLat, b: LngLat): number {
   const p = lngLatToMeters(a, a);

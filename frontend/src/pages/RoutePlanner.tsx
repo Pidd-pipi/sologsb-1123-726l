@@ -8,6 +8,7 @@ import AmapRouteView from '../components/common/AmapRouteView';
 import OverlapCalcPanel from '../components/common/OverlapCalcPanel';
 import { loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
 import { newId } from '../utils/id';
+import { pointInPolygon } from '../utils/geoCalc';
 import type { FlightLine } from '../types/flightline';
 import type { Waypoint } from '../types/waypoint';
 
@@ -29,6 +30,11 @@ export default function RoutePlanner() {
     () => waypoints.filter((w) => w.missionId === id).sort((a, b) => a.seq - b.seq),
     [waypoints, id],
   );
+  /** 落在测区边界外的航点（导入时即在界外或平移后越界）：移回界内前禁止保存航线参数 */
+  const outsideWaypoints = useMemo(() => {
+    if (!mission || mission.areaPolygon.length < 3) return [];
+    return missionWaypoints.filter((w) => !pointInPolygon([w.lng, w.lat], mission.areaPolygon));
+  }, [mission, missionWaypoints]);
 
   const [params, setParams] = useState<RouteParams>({ ...DEFAULT_ROUTE_PARAMS });
   const [savedText, setSavedText] = useState('');
@@ -58,6 +64,10 @@ export default function RoutePlanner() {
 
   const onSave = async () => {
     if (!mission) return;
+    if (outsideWaypoints.length > 0) {
+      setError(`有 ${outsideWaypoints.length} 个航点在测区边界外（#${outsideWaypoints.map((w) => w.seq).join('、#')}），移回界内前不能保存航线参数`);
+      return;
+    }
     const line: FlightLine = {
       id: newId('line'),
       missionId: mission.id,
@@ -129,6 +139,7 @@ export default function RoutePlanner() {
         <Tag color="cyan">{mission.purpose}</Tag>
         <Tag>{mission.areaName}</Tag>
         <Tag color={missionWaypoints.length > 0 ? 'green' : 'default'}>航点 {missionWaypoints.length} 个</Tag>
+        {outsideWaypoints.length > 0 ? <Tag color="error">界外 {outsideWaypoints.length} 个 · 禁止保存</Tag> : null}
         <div style={{ flex: 1 }} />
         <Button type="link">
           <Link to={`/missions/${mission.id}/waypoints`}>航点明细</Link>
@@ -145,6 +156,24 @@ export default function RoutePlanner() {
       </Space>
 
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
+      {outsideWaypoints.length > 0 ? (
+        <Alert
+          data-testid="outside-waypoint-alert"
+          type="error"
+          showIcon
+          message={`有 ${outsideWaypoints.length} 个航点在测区边界外，移回界内前不能保存航线参数`}
+          description={
+            <Space size={4} wrap>
+              {outsideWaypoints.map((w) => (
+                <Tag key={w.id} color="error">
+                  #{w.seq}（{w.lng.toFixed(6)}, {w.lat.toFixed(6)}）
+                </Tag>
+              ))}
+              <Link to={`/missions/${mission.id}/waypoints`}>前往航点明细平移修正</Link>
+            </Space>
+          }
+        />
+      ) : null}
 
       <Row gutter={14}>
         <Col span={15}>
@@ -197,6 +226,8 @@ export default function RoutePlanner() {
             metrics={metrics}
             onSave={onSave}
             savedText={savedText}
+            saveDisabled={outsideWaypoints.length > 0}
+            saveDisabledReason={`有 ${outsideWaypoints.length} 个航点在测区边界外，移回界内前不能保存航线参数`}
           />
         </Col>
       </Row>

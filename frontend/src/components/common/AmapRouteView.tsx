@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Space, Tag, Typography } from 'antd';
 import type { LngLat, Mission } from '../../types/mission';
 import type { Waypoint } from '../../types/waypoint';
-import { createProjector, distanceMeters, groundCoverage } from '../../utils/geoCalc';
+import { createProjector, distanceMeters, groundCoverage, pointInPolygon } from '../../utils/geoCalc';
 import { loadAmap, readAmapKey, type AMapNamespace } from '../../utils/amapLoader';
 
 export interface AmapRouteViewProps {
@@ -66,6 +66,13 @@ export default function AmapRouteView({
   }, [keyPresent]);
 
   // 高德地图分支：绘制多边形 / 折线 / 航点 / 视场矩形
+  const outsideIds = useMemo(() => {
+    if (!mission || mission.areaPolygon.length < 3) return new Set<string>();
+    return new Set(
+      waypoints.filter((w) => !pointInPolygon([w.lng, w.lat], mission.areaPolygon)).map((w) => w.id),
+    );
+  }, [mission, waypoints]);
+
   useEffect(() => {
     if (mode !== 'amap' || !amap || !containerRef.current || !mission) return;
     const container = containerRef.current;
@@ -97,12 +104,22 @@ export default function AmapRouteView({
       );
     }
     waypoints.forEach((w) => {
-      overlays.push(
-        new amap.Marker({
-          position: [w.lng, w.lat],
-          title: `#${w.seq} ${w.altitude} m ${w.action}`,
-        }),
+      const outside = outsideIds.has(w.id);
+      const marker = new amap.Marker(
+        outside
+          ? {
+              position: [w.lng, w.lat],
+              title: `#${w.seq} ${w.altitude} m ${w.action}（测区外，禁止保存航线参数）`,
+              offset: new amap.Pixel(-9, -9),
+              content:
+                '<div style="width:18px;height:18px;border-radius:50%;background:#d93025;border:3px solid #fff;box-sizing:border-box;box-shadow:0 0 0 1px #d93025;"></div>',
+            }
+          : {
+              position: [w.lng, w.lat],
+              title: `#${w.seq} ${w.altitude} m ${w.action}`,
+            },
       );
+      overlays.push(marker);
       if (withFov) {
         const side = groundCoverage(mission.sensorWidth, w.altitude, mission.focalLength);
         const along = groundCoverage(mission.sensorHeight, w.altitude, mission.focalLength);
@@ -132,7 +149,7 @@ export default function AmapRouteView({
       }
       mapRef.current = null;
     };
-  }, [mode, amap, mission, waypoints, withFov]);
+  }, [mode, amap, mission, waypoints, withFov, outsideIds]);
 
   // 本地 SVG 网格视图：等比投影，完全离线
   const projection = useMemo(() => {
@@ -258,11 +275,30 @@ export default function AmapRouteView({
         {waypoints.map((w) => {
           const p = projection.projector.toXY([w.lng, w.lat]);
           const active = w.seq === highlightSeq;
+          const outside = outsideIds.has(w.id);
           return (
             <g key={w.id}>
-              <circle cx={p.x} cy={p.y} r={active ? 8 : 5} fill={active ? '#d93025' : '#1d3557'} />
-              <text x={p.x + 9} y={p.y - 6} fontSize="11" fill="#3c4652">
-                #{w.seq} {w.altitude}m {w.action}
+              {outside ? (
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={active ? 12 : 9}
+                  fill="none"
+                  stroke="#d93025"
+                  strokeWidth={2}
+                  className="waypoint-outside-ring"
+                />
+              ) : null}
+              <circle
+                cx={p.x}
+                cy={p.y}
+                r={active ? 8 : 5}
+                fill={outside ? '#d93025' : active ? '#d93025' : '#1d3557'}
+                stroke={outside ? '#7a0e08' : 'none'}
+                strokeWidth={outside ? 1 : 0}
+              />
+              <text x={p.x + 9} y={p.y - 6} fontSize="11" fill={outside ? '#d93025' : '#3c4652'}>
+                #{w.seq} {w.altitude}m {w.action}{outside ? ' 界外' : ''}
               </text>
             </g>
           );
@@ -279,6 +315,7 @@ export default function AmapRouteView({
         <Tag color="blue">测区边界</Tag>
         <Tag color="orange">航点折线（{waypoints.length} 点）</Tag>
         <Tag>每航点视场矩形</Tag>
+        {outsideIds.size > 0 ? <Tag color="error">界外航点（{outsideIds.size} 点，移回前禁止保存航线参数）</Tag> : null}
         <Tag color="gold">1 px ≈ {pxPerMeter > 0 ? (1 / pxPerMeter).toFixed(1) : '—'} m</Tag>
         {onPickPoint ? <Tag color="green">点击网格可新增航点</Tag> : null}
       </Space>

@@ -1,4 +1,4 @@
-import { Button, Card, Col, Descriptions, Divider, InputNumber, Row, Slider, Space, Statistic, Table, Tag, Typography, type TableProps } from 'antd';
+import { Button, Card, Col, Descriptions, Divider, InputNumber, Row, Slider, Space, Statistic, Table, Tag, Tooltip, Typography, type TableProps } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import type { RouteMetrics, RouteParams } from '../../hooks/useRouteMetrics';
 
@@ -8,6 +8,10 @@ export interface OverlapCalcPanelProps {
   metrics: RouteMetrics;
   onSave?: () => void;
   savedText?: string;
+  /** 禁止保存（例如存在落在测区外的航点） */
+  saveDisabled?: boolean;
+  /** 禁止保存时展示的原因 */
+  saveDisabledReason?: string;
 }
 
 type SortieRow = { sortie: number; photos: number; durationMin: number };
@@ -22,7 +26,7 @@ const columns: NonNullable<TableProps<SortieRow>['columns']> = [
  * 重叠率 / 航高 / 航速表单与 GSD、航线间距、预计张数的实时回算面板。
  * 被航线规划页（/missions/:id/route）与相机预设页（/settings/camera）消费。
  */
-export default function OverlapCalcPanel({ params, onChange, metrics, onSave, savedText }: OverlapCalcPanelProps) {
+export default function OverlapCalcPanel({ params, onChange, metrics, onSave, savedText, saveDisabled = false, saveDisabledReason }: OverlapCalcPanelProps) {
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }} data-testid="overlap-calc-panel">
       <Card size="small" title="航线参数">
@@ -66,9 +70,13 @@ export default function OverlapCalcPanel({ params, onChange, metrics, onSave, sa
           <>
             <Divider style={{ margin: '10px 0' }} />
             <Space>
-              <Button type="primary" icon={<SaveOutlined />} onClick={onSave}>
-                保存航线参数
-              </Button>
+              <Tooltip title={saveDisabled ? saveDisabledReason ?? '当前存在未处理的校验问题，暂不能保存' : undefined}>
+                <span>
+                  <Button type="primary" icon={<SaveOutlined />} onClick={onSave} disabled={saveDisabled}>
+                    保存航线参数
+                  </Button>
+                </span>
+              </Tooltip>
               {savedText ? <Typography.Text type="secondary">{savedText}</Typography.Text> : null}
             </Space>
           </>

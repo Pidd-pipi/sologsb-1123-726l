@@ -7,3 +7,12 @@ body {
 .app-content {
   padding: 16px 20px 40px;
 }
+
+/* 落在测区边界外的航点：表格整行红底，网格/地图中红色描边 */
+.ant-table-wrapper .waypoint-row-outside > td {
+  background: #fff1f0 !important;
+}
+
+.ant-table-wrapper .waypoint-row-outside:hover > td {
+  background: #ffddd8 !important;
+}
