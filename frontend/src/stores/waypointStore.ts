@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { newId } from '../utils/id';
+import { shiftLngLat } from '../utils/geoCalc';
 import type { Waypoint, WaypointDraft } from '../types/waypoint';
 
 interface WaypointState {
@@ -10,6 +11,8 @@ interface WaypointState {
   add: (draft: WaypointDraft) => Promise<Waypoint>;
   addMany: (drafts: WaypointDraft[]) => Promise<Waypoint[]>;
   update: (id: string, patch: Partial<Waypoint>) => Promise<void>;
+  /** 整体平移：把指定航点向东 / 向北移动给定米数（边界校验由调用方负责） */
+  translateMany: (ids: string[], eastM: number, northM: number) => Promise<void>;
   move: (id: string, direction: 'up' | 'down') => Promise<void>;
   reorder: (fromId: string, toId: string) => Promise<void>;
   removeByMission: (missionId: string) => Promise<void>;
@@ -40,6 +43,19 @@ export const useWaypointStore = create<WaypointState>((set, get) => ({
   async update(id, patch) {
     await db.waypoints.update(id, patch);
     set({ items: get().items.map((it) => (it.id === id ? { ...it, ...patch } : it)) });
+  },
+  async translateMany(ids, eastM, northM) {
+    const idSet = new Set(ids);
+    const changed: Waypoint[] = [];
+    const next = get().items.map((it) => {
+      if (!idSet.has(it.id)) return it;
+      const [lng, lat] = shiftLngLat([it.lng, it.lat], eastM, northM);
+      const moved = { ...it, lng: Number(lng.toFixed(6)), lat: Number(lat.toFixed(6)) };
+      changed.push(moved);
+      return moved;
+    });
+    if (changed.length > 0) await db.waypoints.bulkPut(changed);
+    set({ items: next });
   },
   /** 与相邻航点交换序号 */
   async move(id, direction) {

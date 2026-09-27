@@ -8,6 +8,7 @@ import AmapRouteView from '../components/common/AmapRouteView';
 import OverlapCalcPanel from '../components/common/OverlapCalcPanel';
 import { loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
 import { newId } from '../utils/id';
+import { filterOutsidePolygon } from '../utils/geoCalc';
 import type { FlightLine } from '../types/flightline';
 import type { Waypoint } from '../types/waypoint';
 
@@ -34,6 +35,13 @@ export default function RoutePlanner() {
   const [savedText, setSavedText] = useState('');
   const [error, setError] = useState('');
   const metrics = useRouteMetrics(id, params);
+
+  /** 落在测区边界外的航点：存在时禁止保存航线参数 */
+  const outsideRows = useMemo(
+    () => (mission ? filterOutsidePolygon(missionWaypoints, mission.areaPolygon) : []),
+    [mission, missionWaypoints],
+  );
+  const outsideIds = useMemo(() => new Set(outsideRows.map((w) => w.id)), [outsideRows]);
 
   useEffect(() => {
     if (!id) return;
@@ -145,6 +153,14 @@ export default function RoutePlanner() {
       </Space>
 
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
+      {outsideRows.length > 0 ? (
+        <Alert
+          type="error"
+          showIcon
+          message={`航点 ${outsideRows.map((w) => `#${w.seq}`).join('、')} 落在测区外，无法保存航线参数`}
+          description="已在网格中标红；请到「航点明细」用整体平移或逐点修改移回边界内（或删除）后再保存。"
+        />
+      ) : null}
 
       <Row gutter={14}>
         <Col span={15}>
@@ -197,6 +213,8 @@ export default function RoutePlanner() {
             metrics={metrics}
             onSave={onSave}
             savedText={savedText}
+            saveDisabled={outsideRows.length > 0}
+            saveDisabledReason="存在测区外航点，移回边界内后才能保存"
           />
         </Col>
       </Row>
@@ -209,8 +227,9 @@ export default function RoutePlanner() {
         ) : (
           <Space wrap size={6}>
             {missionWaypoints.map((w: Waypoint) => (
-              <Tag key={w.id} color={w.action === '悬停' ? 'gold' : 'blue'}>
+              <Tag key={w.id} color={outsideIds.has(w.id) ? 'red' : w.action === '悬停' ? 'gold' : 'blue'}>
                 #{w.seq} {w.lng.toFixed(5)}, {w.lat.toFixed(5)} · {w.altitude} m · {w.action}
+                {outsideIds.has(w.id) ? ' · 测区外' : ''}
               </Tag>
             ))}
           </Space>

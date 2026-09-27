@@ -7,3 +7,8 @@ body {
 .app-content {
   padding: 16px 20px 40px;
 }
+
+/* 航点明细表格：测区外航点整行标红 */
+.wp-row-outside > td {
+  background: #fff1f0 !important;
+}

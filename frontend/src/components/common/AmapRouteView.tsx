@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Space, Tag, Typography } from 'antd';
 import type { LngLat, Mission } from '../../types/mission';
 import type { Waypoint } from '../../types/waypoint';
-import { createProjector, distanceMeters, groundCoverage } from '../../utils/geoCalc';
+import { createProjector, distanceMeters, filterOutsidePolygon, groundCoverage } from '../../utils/geoCalc';
 import { loadAmap, readAmapKey, type AMapNamespace } from '../../utils/amapLoader';
 
 export interface AmapRouteViewProps {
@@ -41,6 +41,12 @@ export default function AmapRouteView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<{ destroy: () => void } | null>(null);
   const keyPresent = readAmapKey().length > 0;
+
+  /** 落在测区边界外的航点 id（地图与网格统一标红） */
+  const outsideIds = useMemo(() => {
+    if (!mission) return new Set<string>();
+    return new Set(filterOutsidePolygon(waypoints, mission.areaPolygon).map((w) => w.id));
+  }, [mission, waypoints]);
 
   useEffect(() => {
     let alive = true;
@@ -97,12 +103,27 @@ export default function AmapRouteView({
       );
     }
     waypoints.forEach((w) => {
+      const outside = outsideIds.has(w.id);
       overlays.push(
         new amap.Marker({
           position: [w.lng, w.lat],
-          title: `#${w.seq} ${w.altitude} m ${w.action}`,
+          title: `#${w.seq} ${w.altitude} m ${w.action}${outside ? '（测区外）' : ''}`,
+          label: outside ? { content: '<span style="color:#d4380d;font-weight:600">测区外</span>', direction: 'top' } : undefined,
         }),
       );
+      if (outside) {
+        overlays.push(
+          new amap.CircleMarker({
+            center: [w.lng, w.lat],
+            radius: 12,
+            strokeColor: '#d4380d',
+            strokeWeight: 2,
+            strokeStyle: 'dashed',
+            fillColor: '#d4380d',
+            fillOpacity: 0.15,
+          }),
+        );
+      }
       if (withFov) {
         const side = groundCoverage(mission.sensorWidth, w.altitude, mission.focalLength);
         const along = groundCoverage(mission.sensorHeight, w.altitude, mission.focalLength);
@@ -132,7 +153,7 @@ export default function AmapRouteView({
       }
       mapRef.current = null;
     };
-  }, [mode, amap, mission, waypoints, withFov]);
+  }, [mode, amap, mission, waypoints, withFov, outsideIds]);
 
   // 本地 SVG 网格视图：等比投影，完全离线
   const projection = useMemo(() => {
@@ -258,11 +279,24 @@ export default function AmapRouteView({
         {waypoints.map((w) => {
           const p = projection.projector.toXY([w.lng, w.lat]);
           const active = w.seq === highlightSeq;
+          const outside = outsideIds.has(w.id);
           return (
             <g key={w.id}>
-              <circle cx={p.x} cy={p.y} r={active ? 8 : 5} fill={active ? '#d93025' : '#1d3557'} />
-              <text x={p.x + 9} y={p.y - 6} fontSize="11" fill="#3c4652">
-                #{w.seq} {w.altitude}m {w.action}
+              {outside ? (
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={active ? 12 : 10}
+                  fill="#d4380d"
+                  fillOpacity={0.12}
+                  stroke="#d4380d"
+                  strokeWidth={1.5}
+                  strokeDasharray="3 2"
+                />
+              ) : null}
+              <circle cx={p.x} cy={p.y} r={active ? 8 : 5} fill={outside ? '#d4380d' : active ? '#d93025' : '#1d3557'} />
+              <text x={p.x + 9} y={p.y - 6} fontSize="11" fill={outside ? '#d4380d' : '#3c4652'}>
+                #{w.seq} {w.altitude}m {w.action}{outside ? ' 测区外' : ''}
               </text>
             </g>
           );
@@ -280,6 +314,7 @@ export default function AmapRouteView({
         <Tag color="orange">航点折线（{waypoints.length} 点）</Tag>
         <Tag>每航点视场矩形</Tag>
         <Tag color="gold">1 px ≈ {pxPerMeter > 0 ? (1 / pxPerMeter).toFixed(1) : '—'} m</Tag>
+        {outsideIds.size > 0 ? <Tag color="red">红色虚线圈为测区外航点（{outsideIds.size} 个）</Tag> : null}
         {onPickPoint ? <Tag color="green">点击网格可新增航点</Tag> : null}
       </Space>
     </div>

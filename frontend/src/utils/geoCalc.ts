@@ -25,6 +25,11 @@ export function metersToLngLat(x: number, y: number, origin: LngLat): LngLat {
   return [oLng + x / metersPerDegLng(oLat), oLat + y / METERS_PER_DEG_LAT];
 }
 
+/** 把点向东 / 向北平移给定米数（负数表示向西 / 向南），返回新经纬度 */
+export function shiftLngLat(point: LngLat, eastM: number, northM: number): LngLat {
+  return metersToLngLat(eastM, northM, point);
+}
+
 /** 两点间水平距离 m */
 export function distanceMeters(a: LngLat, b: LngLat): number {
   const p = lngLatToMeters(a, a);
@@ -61,6 +66,43 @@ export function polygonCentroid(polygon: LngLat[]): LngLat {
   const sumLng = polygon.reduce((s, p) => s + p[0], 0);
   const sumLat = polygon.reduce((s, p) => s + p[1], 0);
   return [sumLng / polygon.length, sumLat / polygon.length];
+}
+
+/** 点到线段的距离（米制平面坐标下） */
+function distToSegmentMeters(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** 判断点是否在测区多边形内（射线法；落在边界上视为在内，容差 0.5 m） */
+export function pointInPolygon(point: LngLat, polygon: LngLat[]): boolean {
+  if (polygon.length < 3) return false;
+  const EDGE_TOLERANCE_M = 0.5;
+  const p = lngLatToMeters(point, point);
+  const verts = polygon.map((v) => lngLatToMeters(v, point));
+  for (let i = 0; i < verts.length; i += 1) {
+    const j = i === 0 ? verts.length - 1 : i - 1;
+    if (distToSegmentMeters(p, verts[j], verts[i]) <= EDGE_TOLERANCE_M) return true;
+  }
+  let inside = false;
+  for (let i = 0; i < verts.length; i += 1) {
+    const j = i === 0 ? verts.length - 1 : i - 1;
+    const a = verts[i];
+    const b = verts[j];
+    const crosses = a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+/** 过滤出落在测区多边形外的点（多边形不足 3 点时视为全部在内） */
+export function filterOutsidePolygon<T extends { lng: number; lat: number }>(points: T[], polygon: LngLat[]): T[] {
+  if (polygon.length < 3) return [];
+  return points.filter((p) => !pointInPolygon([p.lng, p.lat], polygon));
 }
 
 /** 把经纬度等比投影到给定画布，返回 SVG 坐标 */

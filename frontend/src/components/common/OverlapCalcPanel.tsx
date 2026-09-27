@@ -8,6 +8,10 @@ export interface OverlapCalcPanelProps {
   metrics: RouteMetrics;
   onSave?: () => void;
   savedText?: string;
+  /** 禁用保存按钮（例如存在测区外航点时） */
+  saveDisabled?: boolean;
+  /** 禁用原因提示 */
+  saveDisabledReason?: string;
 }
 
 type SortieRow = { sortie: number; photos: number; durationMin: number };
@@ -22,7 +26,7 @@ const columns: NonNullable<TableProps<SortieRow>['columns']> = [
  * 重叠率 / 航高 / 航速表单与 GSD、航线间距、预计张数的实时回算面板。
  * 被航线规划页（/missions/:id/route）与相机预设页（/settings/camera）消费。
  */
-export default function OverlapCalcPanel({ params, onChange, metrics, onSave, savedText }: OverlapCalcPanelProps) {
+export default function OverlapCalcPanel({ params, onChange, metrics, onSave, savedText, saveDisabled, saveDisabledReason }: OverlapCalcPanelProps) {
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }} data-testid="overlap-calc-panel">
       <Card size="small" title="航线参数">
@@ -66,10 +70,14 @@ export default function OverlapCalcPanel({ params, onChange, metrics, onSave, sa
           <>
             <Divider style={{ margin: '10px 0' }} />
             <Space>
-              <Button type="primary" icon={<SaveOutlined />} onClick={onSave}>
+              <Button type="primary" icon={<SaveOutlined />} onClick={onSave} disabled={saveDisabled}>
                 保存航线参数
               </Button>
-              {savedText ? <Typography.Text type="secondary">{savedText}</Typography.Text> : null}
+              {saveDisabled && saveDisabledReason ? (
+                <Typography.Text type="danger">{saveDisabledReason}</Typography.Text>
+              ) : savedText ? (
+                <Typography.Text type="secondary">{savedText}</Typography.Text>
+              ) : null}
             </Space>
           </>
         ) : null}
